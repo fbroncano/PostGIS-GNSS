@@ -1,0 +1,6 @@
+# Local credentials — never publish these
+postgis.cfg
+
+# OS / editor noise
+.DS_Store
+*.swp
