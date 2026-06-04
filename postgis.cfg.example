@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# PostGIS connection configuration (template)
+#
+# Copy this file to "postgis.cfg" and fill in your own values:
+#
+#     cp postgis.cfg.example postgis.cfg
+#
+# "postgis.cfg" is listed in .gitignore, so your real credentials are
+# never committed nor published on GitHub.
+#
+# This file uses a plain KEY=VALUE syntax so it can be consumed both by
+# Docker Compose (--env-file) and by any client (Python, psql, QGIS...).
+# ---------------------------------------------------------------------------
+
+# Host / IP where the PostGIS server is reachable.
+# Clients connect here; with the bundled docker-compose the server is
+# published on this host at the port below.
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+
+# Database name. Keep it as "positions" unless you also edit the first two
+# lines of scripts/sql/create_tables.sql (the ALTER DATABASE statements
+# reference the database by name).
+POSTGRES_DB=positions
+
+# Role (user) and password used to connect to the database.
+POSTGRES_USER=user
+POSTGRES_PASSWORD=password
+
+# Schema that holds the data model (default: public). Clients can set their
+# search_path to this value.
+POSTGRES_SCHEMA=public

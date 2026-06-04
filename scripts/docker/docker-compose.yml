@@ -1,0 +1,17 @@
+# Variables are read from the repository-root postgis.cfg via --env-file, e.g.
+#   docker compose --env-file postgis.cfg -f scripts/docker/docker-compose.yml up -d
+# The defaults below are only used as a fallback when no --env-file is given.
+services:
+    postgis-ppp:
+        build: .
+        environment:
+            POSTGRES_DB: ${POSTGRES_DB:-positions}
+            POSTGRES_USER: ${POSTGRES_USER:-user}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+        ports:
+            - "${POSTGRES_PORT:-5432}:5432"
+        volumes:
+            - postgres_data:/var/lib/postgresql
+
+volumes:
+    postgres_data:
