@@ -1,4 +1,4 @@
--- Insertar estación
+-- Insert a station
 CREATE OR REPLACE FUNCTION insert_station(
     p_id CHAR(4),
     p_name VARCHAR(25),
@@ -23,7 +23,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Obtener estación
+-- Retrieve a station. frame_id and coord_epoch travel with the coordinates:
+-- location alone does not say which realisation or epoch it refers to.
+DROP FUNCTION IF EXISTS get_station(CHAR(4));
 CREATE OR REPLACE FUNCTION get_station(
     p_id CHAR(4)
 )
@@ -35,7 +37,9 @@ RETURNS TABLE(
     initial_date DATE,
     x DOUBLE PRECISION,
     y DOUBLE PRECISION,
-    z DOUBLE PRECISION
+    z DOUBLE PRECISION,
+    frame_id SMALLINT,
+    coord_epoch NUMERIC
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -47,13 +51,15 @@ BEGIN
         s.initial_date,
         ST_X(s.location),
         ST_Y(s.location),
-        ST_Z(s.location)
+        ST_Z(s.location),
+        s.frame_id,
+        s.coord_epoch
     FROM stations s
     WHERE s.id = p_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- Insertar posición diaria
+-- Insert (or update) a daily position
 CREATE OR REPLACE FUNCTION insert_daily_position(
     p_station_id CHAR(4),
     p_date DATE,
@@ -67,7 +73,8 @@ CREATE OR REPLACE FUNCTION insert_daily_position(
     p_std_z NUMERIC,
     p_std_3d NUMERIC,
     p_n_epochs_used INTEGER,
-    p_n_epochs INTEGER
+    p_n_epochs INTEGER,
+    p_run_id INTEGER
 )
 RETURNS INTEGER AS $$
 DECLARE
@@ -76,13 +83,13 @@ BEGIN
     INSERT INTO daily_positions (
         station_id, date, constellation_id, method_id,
         position, std_x, std_y, std_z, std_3d,
-        n_epochs_used, n_epochs
+        n_epochs_used, n_epochs, run_id
     )
     VALUES (
         p_station_id, p_date, p_constellation_id, p_method_id,
         ST_SetSRID(ST_MakePoint(p_x, p_y, p_z), 4978),
         p_std_x, p_std_y, p_std_z, p_std_3d,
-        p_n_epochs_used, p_n_epochs
+        p_n_epochs_used, p_n_epochs, p_run_id
     )
     ON CONFLICT (station_id, date, constellation_id, method_id)
     DO UPDATE SET
@@ -92,14 +99,15 @@ BEGIN
         std_z = EXCLUDED.std_z,
         std_3d = EXCLUDED.std_3d,
         n_epochs_used = EXCLUDED.n_epochs_used,
-        n_epochs = EXCLUDED.n_epochs
+        n_epochs = EXCLUDED.n_epochs,
+        run_id = EXCLUDED.run_id
     RETURNING id INTO v_id;
 
     RETURN v_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- Insertar estadísticas diarias
+-- Insert (or update) the daily statistics of a session
 CREATE OR REPLACE FUNCTION insert_daily_statistics(
     p_station_id CHAR(4),
     p_date DATE,
@@ -111,7 +119,8 @@ CREATE OR REPLACE FUNCTION insert_daily_statistics(
     p_pdop_max NUMERIC,
     p_tdop_avg NUMERIC,
     p_rms_avg NUMERIC,
-    p_rms_max NUMERIC
+    p_rms_max NUMERIC,
+    p_run_id INTEGER
 )
 RETURNS INTEGER AS $$
 DECLARE
@@ -121,13 +130,13 @@ BEGIN
         station_id, date, constellation_id,
         n_satellites_avg, clock_bias_m,
         gdop_avg, pdop_avg, pdop_max, tdop_avg,
-        rms_avg, rms_max
+        rms_avg, rms_max, run_id
     )
     VALUES (
         p_station_id, p_date, p_constellation_id,
         p_n_satellites_avg, p_clock_bias_m,
         p_gdop_avg, p_pdop_avg, p_pdop_max, p_tdop_avg,
-        p_rms_avg, p_rms_max
+        p_rms_avg, p_rms_max, p_run_id
     )
     ON CONFLICT (station_id, date, constellation_id)
     DO UPDATE SET
@@ -138,14 +147,19 @@ BEGIN
         pdop_max = EXCLUDED.pdop_max,
         tdop_avg = EXCLUDED.tdop_avg,
         rms_avg = EXCLUDED.rms_avg,
-        rms_max = EXCLUDED.rms_max
+        rms_max = EXCLUDED.rms_max,
+        run_id = EXCLUDED.run_id
     RETURNING id INTO v_id;
 
     RETURN v_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- Obtener posiciones diarias por estación y fecha
+-- Retrieve the daily positions of a station on a given date.
+-- Dropped first: CREATE OR REPLACE cannot change the row type declared by the
+-- OUT parameters, so replaying this script over a database created before
+-- run_id was added would otherwise fail.
+DROP FUNCTION IF EXISTS get_daily_positions(CHAR(4), DATE);
 CREATE OR REPLACE FUNCTION get_daily_positions(
     p_station_id CHAR(4),
     p_date DATE
@@ -159,7 +173,8 @@ RETURNS TABLE(
     z DOUBLE PRECISION,
     std_3d NUMERIC,
     n_epochs_used INTEGER,
-    n_epochs INTEGER
+    n_epochs INTEGER,
+    run_id INTEGER
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -172,14 +187,16 @@ BEGIN
         ST_Z(dp.position),
         dp.std_3d,
         dp.n_epochs_used,
-        dp.n_epochs
+        dp.n_epochs,
+        dp.run_id
     FROM daily_positions dp
     WHERE dp.station_id = p_station_id AND dp.date = p_date
     ORDER BY dp.constellation_id, dp.method_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- Obtener estadísticas diarias por estación y fecha
+-- Retrieve the daily statistics of a station on a given date (see above)
+DROP FUNCTION IF EXISTS get_daily_statistics(CHAR(4), DATE);
 CREATE OR REPLACE FUNCTION get_daily_statistics(
     p_station_id CHAR(4),
     p_date DATE
@@ -194,7 +211,8 @@ RETURNS TABLE(
     pdop_max NUMERIC,
     tdop_avg NUMERIC,
     rms_avg NUMERIC,
-    rms_max NUMERIC
+    rms_max NUMERIC,
+    run_id INTEGER
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -208,14 +226,15 @@ BEGIN
         ds.pdop_max,
         ds.tdop_avg,
         ds.rms_avg,
-        ds.rms_max
+        ds.rms_max,
+        ds.run_id
     FROM daily_statistics ds
     WHERE ds.station_id = p_station_id AND ds.date = p_date
     ORDER BY ds.constellation_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- Calcular error respecto a posición de referencia
+-- Error of each daily position with respect to the reference coordinates
 CREATE OR REPLACE FUNCTION get_position_errors(
     p_station_id CHAR(4),
     p_date DATE
@@ -256,7 +275,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Estadísticas agregadas por constelación
+-- Aggregated statistics per constellation
 CREATE OR REPLACE FUNCTION get_constellation_stats(
     p_station_id CHAR(4),
     p_method_id SMALLINT DEFAULT 5
@@ -300,3 +319,125 @@ BEGIN
     ORDER BY dp.constellation_id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- =============================================================================
+-- Conversions between the global ECEF frame and the local topocentric ENU
+-- frame, and reduction of the reference coordinates by the antenna height.
+-- =============================================================================
+
+-- Composite type returned by ecef_to_enu()
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'enu_offset') THEN
+        CREATE TYPE enu_offset AS (
+            east  DOUBLE PRECISION,
+            north DOUBLE PRECISION,
+            up    DOUBLE PRECISION
+        );
+    END IF;
+END$$;
+
+-- Rotates an ECEF offset into the topocentric frame of a reference point.
+-- The geodetic latitude and longitude of the origin are derived from the
+-- reference geometry itself, so callers never handle angles.
+CREATE OR REPLACE FUNCTION ecef_to_enu(
+    p_position  GEOMETRY,
+    p_reference GEOMETRY
+)
+RETURNS enu_offset
+LANGUAGE sql STABLE AS $$
+    SELECT ROW(
+        -sin(lon) * dx + cos(lon) * dy,
+        -sin(lat) * cos(lon) * dx - sin(lat) * sin(lon) * dy + cos(lat) * dz,
+         cos(lat) * cos(lon) * dx + cos(lat) * sin(lon) * dy + sin(lat) * dz
+    )::enu_offset
+    FROM (
+        SELECT ST_X(p_position) - ST_X(p_reference) AS dx,
+               ST_Y(p_position) - ST_Y(p_reference) AS dy,
+               ST_Z(p_position) - ST_Z(p_reference) AS dz,
+               radians(ST_Y(ST_Transform(p_reference, 4326))) AS lat,
+               radians(ST_X(ST_Transform(p_reference, 4326))) AS lon
+    ) t;
+$$;
+
+-- Bulk variant of ecef_to_enu(): the caller supplies the geodetic angles of the
+-- origin, computed once per station instead of once per row.
+--
+-- The two-geometry form above derives them with ST_Transform on every call,
+-- which dominates the cost when the function is applied row by row inside an
+-- aggregation: on a 100k-row scan the per-row transform is two orders of
+-- magnitude more expensive than the rotation itself. Use this form whenever the
+-- origin is constant across a group.
+CREATE OR REPLACE FUNCTION ecef_to_enu(
+    p_position  GEOMETRY,
+    p_reference GEOMETRY,
+    p_lat       DOUBLE PRECISION,
+    p_lon       DOUBLE PRECISION
+)
+RETURNS enu_offset
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT ROW(
+        -sin(p_lon) * dx + cos(p_lon) * dy,
+        -sin(p_lat) * cos(p_lon) * dx - sin(p_lat) * sin(p_lon) * dy + cos(p_lat) * dz,
+         cos(p_lat) * cos(p_lon) * dx + cos(p_lat) * sin(p_lon) * dy + sin(p_lat) * dz
+    )::enu_offset
+    FROM (
+        SELECT ST_X(p_position) - ST_X(p_reference) AS dx,
+               ST_Y(p_position) - ST_Y(p_reference) AS dy,
+               ST_Z(p_position) - ST_Z(p_reference) AS dz
+    ) t;
+$$;
+
+-- Inverse rotation: applies an ENU offset, in metres, to an ECEF point.
+-- The matrix is the transpose of the one used in ecef_to_enu().
+CREATE OR REPLACE FUNCTION enu_to_ecef(
+    p_east      DOUBLE PRECISION,
+    p_north     DOUBLE PRECISION,
+    p_up        DOUBLE PRECISION,
+    p_reference GEOMETRY
+)
+RETURNS GEOMETRY
+LANGUAGE sql STABLE AS $$
+    SELECT ST_SetSRID(ST_MakePoint(
+        ST_X(p_reference) + (-sin(lon) * p_east - sin(lat) * cos(lon) * p_north
+                             + cos(lat) * cos(lon) * p_up),
+        ST_Y(p_reference) + ( cos(lon) * p_east - sin(lat) * sin(lon) * p_north
+                             + cos(lat) * sin(lon) * p_up),
+        ST_Z(p_reference) + ( cos(lat) * p_north + sin(lat) * p_up)
+    ), 4978)
+    FROM (
+        SELECT radians(ST_Y(ST_Transform(p_reference, 4326))) AS lat,
+               radians(ST_X(ST_Transform(p_reference, 4326))) AS lon
+    ) t;
+$$;
+
+-- Reference coordinate directly comparable with a GNSS solution.
+--
+-- stations.location holds the official IGN position referred to the monument
+-- marker, whereas the SPP solution is estimated at the antenna. This function
+-- translates the reference by the antenna offset in force on the given date,
+-- so that the two quantities become directly comparable.
+--
+-- If the station has no antenna configuration recorded for that date, the
+-- reference is returned uncorrected.
+CREATE OR REPLACE FUNCTION station_reference(
+    p_station_id CHAR(4),
+    p_date       DATE
+)
+RETURNS GEOMETRY
+LANGUAGE sql STABLE AS $$
+    SELECT COALESCE(
+        (SELECT enu_to_ecef(a.delta_e::DOUBLE PRECISION,
+                            a.delta_n::DOUBLE PRECISION,
+                            a.delta_h::DOUBLE PRECISION,
+                            s.location)
+         FROM   station_antenna a
+         WHERE  a.station_id = s.id
+           AND  p_date >= a.valid_from::DATE
+           AND  (a.valid_to IS NULL OR p_date < a.valid_to::DATE)
+         ORDER  BY a.valid_from DESC
+         LIMIT  1),
+        s.location)
+    FROM stations s
+    WHERE s.id = p_station_id;
+$$;

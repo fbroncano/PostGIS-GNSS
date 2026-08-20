@@ -2,7 +2,7 @@
 #   docker compose --env-file postgis.cfg -f scripts/docker/docker-compose.yml up -d
 # The defaults below are only used as a fallback when no --env-file is given.
 services:
-    postgis-ppp:
+    postgis-spp:
         build: .
         environment:
             POSTGRES_DB: ${POSTGRES_DB:-positions}
